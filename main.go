@@ -12,6 +12,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"sync"
+	"syscall"
 	"text/template"
 	"time"
 
@@ -20,6 +26,7 @@ import (
 	"github.com/kelseyhightower/envconfig"
 	badge "github.com/narqo/go-badge"
 	"github.com/nlopes/slack"
+	xproxy "github.com/ory/x/proxy"
 	"github.com/paulbellamy/ratecounter"
 )
 
@@ -78,6 +85,14 @@ type Specification struct {
 
 type contextKey string
 
+const (
+	oryUpstreamAPI     = "project.console.ory.sh"
+	oryUpstreamConsole = "console.ory.sh"
+)
+
+var oryAPIPath = regexp.MustCompile(`\/\.ory\/*`)
+var oryUIPath = regexp.MustCompile(`\/\.ui\/*`)
+
 func init() {
 	var showUsage = flag.Bool("h", false, "Show usage")
 	flag.Parse()
@@ -134,18 +149,165 @@ func handleBadge(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	go pollSlack()
+	c := make(chan os.Signal)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	ctx, cancel := context.WithCancel(context.Background())
+	wg := sync.WaitGroup{}
+	wg.Add(4)
+
+	go pollSlack(ctx, &wg)
+	go server(ctx, &wg)
+	go cleanup(cancel, c)
+
+	wg.Wait()
+}
+
+func server(ctx context.Context, wg *sync.WaitGroup) {
+	defer wg.Done()
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/invite/", handleInvite)
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("./static"))))
-	mux.HandleFunc("/", enforceHTTPSFunc(redirectPage))
+	/* 	mux.HandleFunc("/", enforceHTTPSFunc(sessionCheck((redirectPage)))) */
 	mux.HandleFunc("/badge.svg", handleBadge)
 	mux.Handle("/debug/vars", http.DefaultServeMux)
 	mux.HandleFunc("/sessiondata", handleSessionData)
 	mux.HandleFunc("/invitation", homepage)
+
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+
+		if !oryAPIPath.MatchString(r.URL.Path) && !oryUIPath.MatchString(r.URL.Path) {
+			homepage(w, r)
+			return
+		}
+
+		var upstream string
+		var prefix string
+
+		if oryUIPath.MatchString(r.URL.Path) {
+			upstream = oryUpstreamConsole
+			prefix = "/.ui"
+		} else {
+			upstream = oryUpstreamAPI
+			prefix = "/.ory"
+		}
+
+		xproxy.New(
+			func(_ context.Context, r *http.Request) (*xproxy.HostConfig, error) {
+				return &xproxy.HostConfig{
+					CookieDomain:   r.Host,
+					UpstreamHost:   upstream,
+					UpstreamScheme: "https",
+					TargetHost:     upstream,
+					PathPrefix:     prefix,
+					CorsEnabled:    false,
+				}, nil
+			},
+			xproxy.WithReqMiddleware(func(r *http.Request, c *xproxy.HostConfig, body []byte) ([]byte, error) {
+				log.Println("Proxy Request to Upstream...")
+				log.Printf("Request: %+v\n", r)
+
+				if r.URL.Host == upstream {
+					r.Host = upstream
+				}
+
+				// r.Header.Set("Ory-No-Custom-Domain-Redirect", "true")
+				// r.Header.Set("Ory-Base-URL-Rewrite", "http://localhost:3000")
+				// r.Header.Set("Ory-Base-URL-Rewrite-Token", apiKey)
+
+				return body, nil
+			}),
+			xproxy.WithRespMiddleware(func(resp *http.Response, config *xproxy.HostConfig, body []byte) ([]byte, error) {
+				log.Println("Proxy Response from Upstream...")
+
+				log.Printf("Response: %+v\n", resp)
+				l, err := resp.Location()
+				if err == nil {
+					if l.Host == oryUpstreamConsole {
+						upstream = oryUpstreamConsole
+						prefix = ".ui"
+					}
+					if l.Host == oryUpstreamAPI {
+						upstream = oryUpstreamAPI
+						prefix = ".ory"
+					}
+
+					newLocation := l
+
+					if newLocation.Host == upstream {
+						newLocation.Scheme = "http"
+						newLocation.Host = "localhost:3000"
+						if !strings.HasPrefix(newLocation.Path, prefix) {
+							newLocation.Path = filepath.Join(prefix, newLocation.Path)
+						}
+					}
+
+					resp.Header.Set("Location", newLocation.String())
+				}
+
+				body = []byte(strings.ReplaceAll(string(body), "/_next/", "/.ui/_next/"))
+				body = []byte(strings.ReplaceAll(string(body), "/__ENV.js", "/.ui/__ENV.js"))
+				body = []byte(strings.ReplaceAll(string(body), "/manifest.json", "/.ui/manifest.json"))
+				body = []byte(strings.ReplaceAll(string(body), "/favicon.ico", "/.ui/favicon.ico"))
+				body = []byte(strings.ReplaceAll(string(body), "/assets", "/.ui/assets"))
+				body = []byte(strings.ReplaceAll(string(body), "https://project.console.ory.sh", "http://localhost:3000/.ory"))
+				body = []byte(strings.ReplaceAll(string(body), "http://project.console.ory.sh", "http://localhost:3000/.ory"))
+				body = []byte(strings.ReplaceAll(string(body), "\"rpId\":\"console.ory.sh\"", "\"rpId\":\"localhost:3000\""))
+
+				// 	newLocation := l
+				// 	newLocation.Scheme = "http"
+				// 	newLocation.Host = "localhost:3000"
+				//
+				// 	newLocation.Path = filepath.Join(".ory", newLocation.Path)
+				//
+				// 	resp.Header.Set("Location", newLocation.String())
+				// }
+
+				return body, nil
+			}),
+		).ServeHTTP(w, r)
+	})
+
 	err := http.ListenAndServe(":"+c.Port, handlers.CombinedLoggingHandler(os.Stdout, mux))
 	if err != nil {
 		log.Fatal(err.Error())
+	}
+}
+
+func cleanup(cancel context.CancelFunc, c chan os.Signal) {
+	<-c
+	cancel()
+	os.Exit(1)
+}
+
+func sessionCheck(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		req, err := http.NewRequestWithContext(r.Context(), "GET", fmt.Sprintf("http://%s/.ory/sessions/whoami", r.Host), nil)
+		if err != nil {
+			http.Error(w, "Something unexpected went wrong\n"+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		for _, cookie := range r.Cookies() {
+			req.AddCookie(cookie)
+		}
+
+		req.Header.Set("Accept", "application/json")
+
+		c := &http.Client{}
+		resp, err := c.Do(req)
+		if err != nil {
+			http.Error(w, "LOL Something unexpected went wrong", http.StatusInternalServerError)
+			return
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			http.Redirect(w, r, "/.ory/self-service/login/browser?refresh=true", http.StatusSeeOther)
+			return
+		}
+
+		h.ServeHTTP(w, r)
 	}
 }
 
@@ -167,14 +329,13 @@ func enforceHTTPSFunc(h http.HandlerFunc) http.HandlerFunc {
 // Updates the globals from the slack API
 // returns the length of time to sleep before the function
 // should be called again
-func updateFromSlack() time.Duration {
+func updateFromSlack(ctx context.Context) time.Duration {
 	var (
 		err            error
 		p              slack.UserPagination
 		uCount, aCount int64 // users and active users
 	)
 
-	ctx := context.Background()
 	for p = api.GetUsersPaginated(
 		slack.GetUsersOptionPresence(true),
 		slack.GetUsersOptionLimit(500),
@@ -214,9 +375,10 @@ func updateFromSlack() time.Duration {
 }
 
 // pollSlack over and over again
-func pollSlack() {
+func pollSlack(ctx context.Context, wg *sync.WaitGroup) {
+	defer wg.Done()
 	for {
-		time.Sleep(updateFromSlack())
+		time.Sleep(updateFromSlack(ctx))
 	}
 }
 
