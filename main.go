@@ -222,6 +222,7 @@ func pollSlack() {
 	}
 }
 
+// handleSession handles Ory Network's session data and renders the invite page
 func handleSession(w http.ResponseWriter, r *http.Request) {
 	var sessionData SessionData
 
@@ -284,7 +285,7 @@ func handleSession(w http.ResponseWriter, r *http.Request) {
 	buf.WriteTo(w)
 }
 
-// redirectPage renders the redirect page
+// redirectPage renders the page you get redirected to when there is no session
 func redirectPage(w http.ResponseWriter, r *http.Request) {
 	counter.Incr(1)
 	hitsPerMinute.Set(counter.Rate())

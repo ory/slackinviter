@@ -11,26 +11,13 @@ async function whoami() {
   }
 }
 async function getSession() {
-  const url = "https://auth.slackinviter.vinckr.com/sessions/whoami"; // Replace with the actual URL
+  const url = "https://project.console.ory.sh/sessions/whoami";
   console.log("getting session data");
   try {
     const response = await fetch(url, {
       credentials: "include",
       mode: "cors",
     });
-    /*     const response = {
-      id: "d4f5bb7e-d937-4d87-a0b7-0927312cdebd",
-      active: true,
-      expires_at: "2023-07-20T12:32:17.409035Z",
-      identity: {
-        id: "eb813b51-3e69-4b72-ae91-7fa2303aa39b",
-        state: "active",
-        traits: { email: "vincent+test123@ory.sh", name: "asd" },
-      },
-    }; */
-
-    console.log("response: ", response);
-
     if (response.ok) {
       const responseData = await response.json();
       return responseData;
@@ -40,8 +27,8 @@ async function getSession() {
       );
     }
   } catch (error) {
-    console.error(error.message); // Error message
-    throw error; // Rethrow the error to propagate it to the caller
+    console.error(error.message);
+    throw error;
   }
 }
 async function createAndSubmitForm(sessionData) {
@@ -71,7 +58,7 @@ async function createAndSubmitForm(sessionData) {
       }
     } catch (error) {
       console.error("Error while fetching HTML content: ", error.message);
-      throw error; // Rethrow the error to propagate it to the caller
+      throw error;
     }
   });
   form.submit();
