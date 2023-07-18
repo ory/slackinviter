@@ -53,11 +53,6 @@ var (
 
 var c Specification
 
-// wrapper for Session Data
-type SessionResponse struct {
-	SessionData SessionData `json:"sessionData"`
-}
-
 type SessionData struct {
 	Identity struct {
 		Traits struct {
