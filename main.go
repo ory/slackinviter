@@ -79,8 +79,6 @@ type Specification struct {
 	Debug          bool // toggles nlopes/slack client's debug flag
 }
 
-type contextKey string
-
 func init() {
 	var showUsage = flag.Bool("h", false, "Show usage")
 	flag.Parse()
