@@ -1,7 +1,6 @@
 async function whoami() {
   try {
     const sessionData = await getSession();
-    console.log("session data: ", sessionData);
     createAndSubmitForm(sessionData);
   } catch (error) {
     console.error(
