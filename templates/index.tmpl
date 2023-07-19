@@ -12,9 +12,6 @@
                 <div class="logo org"></div>
             </div>
             <p>Join <b>{{.Team.Name}}</b> on Slack.</p>
-            <p class="status">
-                <b class="active">{{.ActiveCount}}</b> users online now of <b class="total">{{.UserCount}}</b> registered.
-            </p>
             <form>
                 <input type="hidden" name="email" type="email" value="{{ .SessionData.Identity.Traits.Email }}">
                 <input autofocus="true" class="form-item" name="fname" placeholder="First name" type="text">
