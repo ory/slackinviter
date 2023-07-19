@@ -7,10 +7,13 @@ import (
 	"expvar"
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
+	"strings"
 	"text/template"
 	"time"
 
@@ -19,13 +22,8 @@ import (
 	"github.com/kelseyhightower/envconfig"
 	badge "github.com/narqo/go-badge"
 	"github.com/nlopes/slack"
-	ory "github.com/ory/client-go"
 	"github.com/paulbellamy/ratecounter"
 )
-
-type App struct {
-	ory *ory.APIClient
-}
 
 var indexTemplate = template.Must(template.New("index.tmpl").ParseFiles("templates/index.tmpl"))
 var redirectTemplate = template.Must(template.New("redirect.tmpl").ParseFiles("templates/redirect.tmpl"))
@@ -56,18 +54,22 @@ var (
 var c Specification
 
 type SessionData struct {
-	Email string
-	Name  string
+	Identity struct {
+		Traits struct {
+			Email string `json:"email"`
+			Name  string `json:"name"`
+		} `json:"traits"`
+	} `json:"identity"`
 }
 
 // Specification is the config struct
 type Specification struct {
-	Port           string `envconfig:"PORT" required:"true"`
-	CaptchaSitekey string `required:"true"`
-	CaptchaSecret  string `required:"true"`
-	SlackToken     string `required:"true"`
-	CocUrl         string `required:"false" default:"http://coc.golangbridge.org/"`
-	SessionData    json.RawMessage
+	Port           string        `envconfig:"PORT" required:"true"`
+	CaptchaSitekey string        `required:"true"`
+	CaptchaSecret  string        `required:"true"`
+	SlackToken     string        `required:"true"`
+	CocUrl         string        `required:"false" default:"http://coc.golangbridge.org/"`
+	SessionData    []SessionData `json:"sessionData"`
 	EnforceHTTPS   bool
 	Debug          bool // toggles nlopes/slack client's debug flag
 }
@@ -127,67 +129,18 @@ func handleBadge(w http.ResponseWriter, r *http.Request) {
 	buf.WriteTo(w)
 }
 
-// save the cookies for any upstream calls to the Ory apis
-func withCookies(ctx context.Context, v string) context.Context {
-	return context.WithValue(ctx, "req.cookies", v)
-}
-
-func getCookies(ctx context.Context) string {
-	return ctx.Value("req.cookies").(string)
-}
-
-// save the session to display it on the dashboard
-func withSession(ctx context.Context, v *ory.Session) context.Context {
-	return context.WithValue(ctx, "req.session", v)
-}
-
-func getSession(ctx context.Context) *ory.Session {
-	return ctx.Value("req.session").(*ory.Session)
-}
-
 func main() {
 	go pollSlack()
-	config := ory.NewConfiguration()
-	config.Servers = ory.ServerConfigurations{{URL: "https://project.console.ory.sh"}}
-	app := &App{
-		ory: ory.NewAPIClient(config),
-	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/invite/", handleInvite)
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("./static"))))
-	mux.HandleFunc("/", app.sessionMiddleware(enforceHTTPSFunc(homepage)))
+	mux.HandleFunc("/", enforceHTTPSFunc(redirectPage))
 	mux.HandleFunc("/badge.svg", handleBadge)
 	mux.Handle("/debug/vars", http.DefaultServeMux)
+	mux.HandleFunc("/invitation", handleSession)
 	err := http.ListenAndServe(":"+c.Port, handlers.CombinedLoggingHandler(os.Stdout, mux))
 	if err != nil {
 		log.Fatal(err.Error())
-	}
-}
-
-func (app *App) sessionMiddleware(next http.HandlerFunc) http.HandlerFunc {
-	return func(writer http.ResponseWriter, request *http.Request) {
-		// this passes all request.Cookies to `ToSession` function
-		cookies := request.Header.Get("Cookie")
-		// check if we have a session
-		session, _, err := app.ory.FrontendApi.ToSession(request.Context()).Cookie(cookies).Execute()
-		if (err != nil && session == nil) || (err == nil && !*session.Active) {
-			// Render a separate page with a button to redirect the user to the login page
-			writer.WriteHeader(http.StatusOK)
-			writer.Header().Set("Content-Type", "text/html; charset=utf-8")
-			err = redirectTemplate.Execute(writer, nil)
-			if err != nil {
-				http.Error(writer, err.Error(), http.StatusInternalServerError)
-				return
-			}
-
-			return
-		}
-
-		ctx := withCookies(request.Context(), cookies)
-		ctx = withSession(ctx, session)
-
-		// continue to the requested page
-		next.ServeHTTP(writer, request.WithContext(ctx))
 	}
 }
 
@@ -262,22 +215,42 @@ func pollSlack() {
 	}
 }
 
-// Homepage renders the homepage
-func homepage(w http.ResponseWriter, r *http.Request) {
+// handleSession handles Ory Network's session data and renders the invite page
+func handleSession(w http.ResponseWriter, r *http.Request) {
+	var sessionData SessionData
+
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	// Read the request body
+	body, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Error reading request body",
+			http.StatusInternalServerError)
+		return
+	}
+	// convert body to a string and trim the leading "sessionData="
+	bodyString := strings.TrimPrefix(string(body), "sessionData=")
+	// Decode the URL-encoded string
+	decodedString, err := url.QueryUnescape(bodyString)
+	if err != nil {
+		log.Println("Error decoding URL-encoded string:", err)
+		return
+	}
+	// Unmarshal the JSON-encoded decodedString into sessionData
+	err = json.Unmarshal(([]byte(decodedString)), &sessionData)
+	if err != nil {
+		log.Println("Error unmarshalling JSON into sessionData:", err)
+		return
+	}
+	// set other template variables
 	counter.Incr(1)
 	hitsPerMinute.Set(counter.Rate())
 	requests.Add(1)
-
-	// Get session data
-	session := getSession(r.Context())
-	traits := session.Identity.Traits.(map[string]interface{})
-	sessionData := &SessionData{
-		Email: traits["email"].(string),
-		Name:  traits["name"].(string),
-	}
-
+	// Render the index template with sessionData
 	var buf bytes.Buffer
-	err := indexTemplate.Execute(
+	errRender := indexTemplate.Execute(
 		&buf,
 		struct {
 			SiteKey,
@@ -285,7 +258,7 @@ func homepage(w http.ResponseWriter, r *http.Request) {
 			ActiveCount string
 			Team        *team
 			CocUrl      string
-			SessionData *SessionData
+			SessionData SessionData
 		}{
 			c.CaptchaSitekey,
 			userCount.String(),
@@ -295,14 +268,23 @@ func homepage(w http.ResponseWriter, r *http.Request) {
 			sessionData,
 		},
 	)
-	if err != nil {
+	if errRender != nil {
 		log.Println("error rendering template:", err)
 		http.Error(w, "error rendering template :-(", http.StatusInternalServerError)
 		return
 	}
+
 	// Set the header and write the buffer to the http.ResponseWriter
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	buf.WriteTo(w)
+}
+
+// redirectPage renders the page you get redirected to when there is no session
+func redirectPage(w http.ResponseWriter, r *http.Request) {
+	counter.Incr(1)
+	hitsPerMinute.Set(counter.Rate())
+	requests.Add(1)
+	redirectTemplate.Execute(w, nil)
 }
 
 // ShowPost renders a single post

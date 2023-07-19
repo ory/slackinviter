@@ -1,8 +1,9 @@
 <html>
     <head>
-        <title>Join {{.Team.Name}} on Slack!</title>
+        <title>Join the Ory Community on Slack!</title>
         <meta name="viewport" content="width=device-width,initial-scale=1.0,minimum-scale=1.0,user-scalable=no">
         <link rel="shortcut icon" href="static/favicon.ico">
+        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=Share+Tech+Mono&amp;display=swap" rel="stylesheet">
         <script src="https://www.google.com/recaptcha/api.js"></script>
     </head>
     <body>
@@ -15,9 +16,9 @@
                 <b class="active">{{.ActiveCount}}</b> users online now of <b class="total">{{.UserCount}}</b> registered.
             </p>
             <form>
-                <input type="hidden" name="email" type="email" value="{{ .SessionData.Email }}">
+                <input type="hidden" name="email" type="email" value="{{ .SessionData.Identity.Traits.Email }}">
                 <input autofocus="true" class="form-item" name="fname" placeholder="First name" type="text">
-                <input autofocus="true" class="form-item" name="lname" placeholder="Last name" type="text" value="{{ .SessionData.Name }}">
+                <input autofocus="true" class="form-item" name="lname" placeholder="Last name" type="text" value="{{ .SessionData.Identity.Traits.Name }}">
                 <div class="coc">
                     <label>
                         <input name="coc" type="checkbox" value="1">
@@ -39,7 +40,7 @@
                     width: 300px;
                     margin: 200px auto;
                     text-align: center;
-                    font-family: "Helvetica Neue", Helvetica, Arial
+                    font-family: Inter, "Helvetica Neue", Helvetica, Arial
                 }
 
                 @media (max-width: 500px) {
@@ -58,8 +59,8 @@
                 }
 
                 .logo {
-                    width: 96px;
-                    height: 96px;
+                    width: 300px;
+                    height: 150px;
                     display: inline-block;
                     background-size: cover;
                     margin-left: 0.3em
