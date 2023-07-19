@@ -228,6 +228,7 @@ func handleSession(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, "Error reading request body",
 			http.StatusInternalServerError)
+		return
 	}
 	// convert body to a string and trim the leading "sessionData="
 	bodyString := strings.TrimPrefix(string(body), "sessionData=")
