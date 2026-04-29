@@ -3,17 +3,13 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"expvar"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
-	"strings"
 	"text/template"
 	"time"
 
@@ -26,7 +22,6 @@ import (
 )
 
 var indexTemplate = template.Must(template.New("index.tmpl").ParseFiles("templates/index.tmpl"))
-var redirectTemplate = template.Must(template.New("redirect.tmpl").ParseFiles("templates/redirect.tmpl"))
 
 var (
 	api     *slack.Client
@@ -53,23 +48,13 @@ var (
 
 var c Specification
 
-type SessionData struct {
-	Identity struct {
-		Traits struct {
-			Email string `json:"email"`
-			Name  string `json:"name"`
-		} `json:"traits"`
-	} `json:"identity"`
-}
-
 // Specification is the config struct
 type Specification struct {
-	Port           string        `envconfig:"PORT" required:"true"`
-	CaptchaSitekey string        `required:"true"`
-	CaptchaSecret  string        `required:"true"`
-	SlackToken     string        `required:"true"`
-	CocUrl         string        `required:"false" default:"http://coc.golangbridge.org/"`
-	SessionData    []SessionData `json:"sessionData"`
+	Port           string `envconfig:"PORT" required:"true"`
+	CaptchaSitekey string `required:"true"`
+	CaptchaSecret  string `required:"true"`
+	SlackToken     string `required:"true"`
+	CocUrl         string `required:"false" default:"http://coc.golangbridge.org/"`
 	EnforceHTTPS   bool
 	Debug          bool // toggles nlopes/slack client's debug flag
 }
@@ -134,10 +119,9 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/invite/", handleInvite)
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("./static"))))
-	mux.HandleFunc("/", enforceHTTPSFunc(redirectPage))
+	mux.HandleFunc("/", enforceHTTPSFunc(handleIndex))
 	mux.HandleFunc("/badge.svg", handleBadge)
 	mux.Handle("/debug/vars", http.DefaultServeMux)
-	mux.HandleFunc("/invitation", handleSession)
 	err := http.ListenAndServe(":"+c.Port, handlers.CombinedLoggingHandler(os.Stdout, mux))
 	if err != nil {
 		log.Fatal(err.Error())
@@ -215,76 +199,25 @@ func pollSlack() {
 	}
 }
 
-// handleSession handles Ory Network's session data and renders the invite page
-func handleSession(w http.ResponseWriter, r *http.Request) {
-	var sessionData SessionData
-
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	// Read the request body
-	body, err := ioutil.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, "Error reading request body",
-			http.StatusInternalServerError)
-		return
-	}
-	// convert body to a string and trim the leading "sessionData="
-	bodyString := strings.TrimPrefix(string(body), "sessionData=")
-	// Decode the URL-encoded string
-	decodedString, err := url.QueryUnescape(bodyString)
-	if err != nil {
-		log.Println("Error decoding URL-encoded string:", err)
-		return
-	}
-	// Unmarshal the JSON-encoded decodedString into sessionData
-	err = json.Unmarshal(([]byte(decodedString)), &sessionData)
-	if err != nil {
-		log.Println("Error unmarshalling JSON into sessionData:", err)
-		return
-	}
-	// set other template variables
+func handleIndex(w http.ResponseWriter, r *http.Request) {
 	counter.Incr(1)
 	hitsPerMinute.Set(counter.Rate())
 	requests.Add(1)
-	// Render the index template with sessionData
 	var buf bytes.Buffer
-	errRender := indexTemplate.Execute(
-		&buf,
-		struct {
-			SiteKey,
-			UserCount,
-			ActiveCount string
-			Team        *team
-			CocUrl      string
-			SessionData SessionData
-		}{
-			c.CaptchaSitekey,
-			userCount.String(),
-			activeUserCount.String(),
-			ourTeam,
-			c.CocUrl,
-			sessionData,
-		},
-	)
-	if errRender != nil {
+	err := indexTemplate.Execute(&buf, struct {
+		SiteKey string
+		CocUrl  string
+	}{
+		c.CaptchaSitekey,
+		c.CocUrl,
+	})
+	if err != nil {
 		log.Println("error rendering template:", err)
 		http.Error(w, "error rendering template :-(", http.StatusInternalServerError)
 		return
 	}
-
-	// Set the header and write the buffer to the http.ResponseWriter
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	buf.WriteTo(w)
-}
-
-// redirectPage renders the page you get redirected to when there is no session
-func redirectPage(w http.ResponseWriter, r *http.Request) {
-	counter.Incr(1)
-	hitsPerMinute.Set(counter.Rate())
-	requests.Add(1)
-	redirectTemplate.Execute(w, nil)
 }
 
 // ShowPost renders a single post
