@@ -3,17 +3,18 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"expvar"
 	"flag"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"text/template"
 	"time"
 
-	"github.com/go-recaptcha/recaptcha"
 	"github.com/gorilla/handlers"
 	"github.com/kelseyhightower/envconfig"
 	badge "github.com/narqo/go-badge"
@@ -25,7 +26,6 @@ var indexTemplate = template.Must(template.New("index.tmpl").ParseFiles("templat
 
 var (
 	api     *slack.Client
-	captcha *recaptcha.Recaptcha
 	counter *ratecounter.RateCounter
 
 	ourTeam = new(team)
@@ -54,7 +54,7 @@ type Specification struct {
 	CaptchaSitekey string `required:"true"`
 	CaptchaSecret  string `required:"true"`
 	SlackToken     string `required:"true"`
-	CocUrl         string `required:"false" default:"http://coc.golangbridge.org/"`
+	CocUrl         string `required:"false" default:"https://github.com/ory/kratos/blob/master/CODE_OF_CONDUCT.md"`
 	EnforceHTTPS   bool
 	Debug          bool // toggles nlopes/slack client's debug flag
 }
@@ -91,7 +91,6 @@ func init() {
 	m.Set("active_user_count", &activeUserCount)
 	m.Set("user_count", &userCount)
 
-	captcha = recaptcha.New(c.CaptchaSecret)
 	api = slack.New(c.SlackToken, slack.OptionDebug(c.Debug))
 }
 
@@ -220,6 +219,25 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 	buf.WriteTo(w)
 }
 
+func verifyTurnstile(token, remoteIP string) (bool, error) {
+	resp, err := http.PostForm("https://challenges.cloudflare.com/turnstile/v0/siteverify", url.Values{
+		"secret":   {c.CaptchaSecret},
+		"response": {token},
+		"remoteip": {remoteIP},
+	})
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	var result struct {
+		Success bool `json:"success"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return false, err
+	}
+	return result.Success, nil
+}
+
 // ShowPost renders a single post
 func handleInvite(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
@@ -258,18 +276,17 @@ func handleInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	captchaResponse := r.FormValue("g-recaptcha-response")
-	valid, err := captcha.Verify(captchaResponse, remoteIP)
+	captchaResponse := r.FormValue("cf-turnstile-response")
+	valid, err := verifyTurnstile(captchaResponse, remoteIP)
 	if err != nil {
 		failedCaptcha.Add(1)
-		http.Error(w, "Error validating recaptcha.. Did you click it?", http.StatusPreconditionFailed)
+		http.Error(w, "Error validating captcha.. Did you complete it?", http.StatusPreconditionFailed)
 		return
 	}
 	if !valid {
 		invalidCaptcha.Add(1)
-		http.Error(w, "Invalid recaptcha", http.StatusInternalServerError)
+		http.Error(w, "Invalid captcha", http.StatusInternalServerError)
 		return
-
 	}
 	// all is well, let's try to invite someone!
 	err = api.InviteToTeam(ourTeam.Domain(), fname, lname, email)

@@ -11,16 +11,16 @@
       "required": true
     },
     "SLACKINVITER_CAPTCHASITEKEY": {
-      "description": "Recaptcha sitekey",
+      "description": "Captcha sitekey",
       "required": true
     },
     "SLACKINVITER_CAPTCHASECRET": {
-      "description": "Recaptcha secret key",
+      "description": "Captcha secret key",
       "required": true
     },
     "SLACKINVITER_COCURL": {
       "description": "Url to a code of conduct",
-      "value": "http://coc.golangbridge.org/",
+      "value": "https://github.com/ory/kratos/blob/master/CODE_OF_CONDUCT.md",
       "required": false
     }
   }
