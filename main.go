@@ -7,13 +7,11 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"text/template"
 	"time"
 
-	"github.com/go-recaptcha/recaptcha"
 	"github.com/gorilla/handlers"
 	"github.com/kelseyhightower/envconfig"
 	badge "github.com/narqo/go-badge"
@@ -25,7 +23,6 @@ var indexTemplate = template.Must(template.New("index.tmpl").ParseFiles("templat
 
 var (
 	api     *slack.Client
-	captcha *recaptcha.Recaptcha
 	counter *ratecounter.RateCounter
 
 	ourTeam = new(team)
@@ -38,9 +35,6 @@ var (
 	missingLastName,
 	missingEmail,
 	missingCoC,
-	successfulCaptcha,
-	failedCaptcha,
-	invalidCaptcha,
 	successfulInvites,
 	userCount,
 	activeUserCount expvar.Int
@@ -50,13 +44,11 @@ var c Specification
 
 // Specification is the config struct
 type Specification struct {
-	Port           string `envconfig:"PORT" required:"true"`
-	CaptchaSitekey string `required:"true"`
-	CaptchaSecret  string `required:"true"`
-	SlackToken     string `required:"true"`
-	CocUrl         string `required:"false" default:"http://coc.golangbridge.org/"`
-	EnforceHTTPS   bool
-	Debug          bool // toggles nlopes/slack client's debug flag
+	Port         string `envconfig:"PORT" required:"true"`
+	SlackToken   string `required:"true"`
+	CocUrl       string `required:"false" default:"http://coc.golangbridge.org/"`
+	EnforceHTTPS bool
+	Debug        bool // toggles nlopes/slack client's debug flag
 }
 
 func init() {
@@ -84,14 +76,10 @@ func init() {
 	m.Set("missing_last_name", &missingLastName)
 	m.Set("missing_email", &missingEmail)
 	m.Set("missing_coc", &missingCoC)
-	m.Set("failed_captcha", &failedCaptcha)
-	m.Set("invalid_captcha", &invalidCaptcha)
-	m.Set("successful_captcha", &successfulCaptcha)
 	m.Set("successful_invites", &successfulInvites)
 	m.Set("active_user_count", &activeUserCount)
 	m.Set("user_count", &userCount)
 
-	captcha = recaptcha.New(c.CaptchaSecret)
 	api = slack.New(c.SlackToken, slack.OptionDebug(c.Debug))
 }
 
@@ -205,10 +193,8 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 	requests.Add(1)
 	var buf bytes.Buffer
 	err := indexTemplate.Execute(&buf, struct {
-		SiteKey string
-		CocUrl  string
+		CocUrl string
 	}{
-		c.CaptchaSitekey,
 		c.CocUrl,
 	})
 	if err != nil {
@@ -226,7 +212,6 @@ func handleInvite(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
 		return
 	}
-	successfulCaptcha.Add(1)
 	fname := r.FormValue("fname")
 	lname := r.FormValue("lname")
 	email := r.FormValue("email")
@@ -251,28 +236,8 @@ func handleInvite(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "You need to accept the code of conduct", http.StatusPreconditionFailed)
 		return
 	}
-	remoteIP, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		failedCaptcha.Add(1)
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return
-	}
-
-	captchaResponse := r.FormValue("g-recaptcha-response")
-	valid, err := captcha.Verify(captchaResponse, remoteIP)
-	if err != nil {
-		failedCaptcha.Add(1)
-		http.Error(w, "Error validating recaptcha.. Did you click it?", http.StatusPreconditionFailed)
-		return
-	}
-	if !valid {
-		invalidCaptcha.Add(1)
-		http.Error(w, "Invalid recaptcha", http.StatusInternalServerError)
-		return
-
-	}
 	// all is well, let's try to invite someone!
-	err = api.InviteToTeam(ourTeam.Domain(), fname, lname, email)
+	err := api.InviteToTeam(ourTeam.Domain(), fname, lname, email)
 	if err != nil {
 		log.Println("InviteToTeam error:", err)
 		inviteErrors.Add(1)
