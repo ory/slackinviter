@@ -13,7 +13,7 @@
             </div>
             <p>Join <b>{{.Team.Name}}</b> on Slack.</p>
             <form>
-                <input type="hidden" name="email" type="email" value="{{ .SessionData.Identity.Traits.Email }}">
+                <input class="form-item" name="email" placeholder="Email address" type="email" value="{{ .SessionData.Identity.Traits.Email }}">
                 <input autofocus="true" class="form-item" name="fname" placeholder="First name" type="text">
                 <input autofocus="true" class="form-item" name="lname" placeholder="Last name" type="text" value="{{ .SessionData.Identity.Traits.Name }}">
                 <div class="coc">

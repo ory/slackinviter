@@ -215,8 +215,38 @@ func pollSlack() {
 	}
 }
 
-// handleSession handles Ory Network's session data and renders the invite page
+// handleSession handles the invite page (GET renders form, POST processes session data)
 func handleSession(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		counter.Incr(1)
+		hitsPerMinute.Set(counter.Rate())
+		requests.Add(1)
+		var buf bytes.Buffer
+		errRender := indexTemplate.Execute(&buf, struct {
+			SiteKey,
+			UserCount,
+			ActiveCount string
+			Team        *team
+			CocUrl      string
+			SessionData SessionData
+		}{
+			c.CaptchaSitekey,
+			userCount.String(),
+			activeUserCount.String(),
+			ourTeam,
+			c.CocUrl,
+			SessionData{},
+		})
+		if errRender != nil {
+			log.Println("error rendering template:", errRender)
+			http.Error(w, "error rendering template :-(", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		buf.WriteTo(w)
+		return
+	}
+
 	var sessionData SessionData
 
 	if r.Method != http.MethodPost {
