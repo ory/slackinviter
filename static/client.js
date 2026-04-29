@@ -19,7 +19,7 @@ body.addEventListener('submit', function(ev){
   button.disabled = true;
   button.className = '';
   button.innerHTML = 'Please Wait';
-  invite(coc && coc.checked ? 1 : 0, email.value, first_name.value, last_name.value, document.getElementById("g-recaptcha-response").value, function(err){
+  invite(coc && coc.checked ? 1 : 0, email.value, first_name.value, last_name.value, function(err){
     if (err) {
       button.removeAttribute('disabled');
       button.className = 'error';
@@ -32,7 +32,7 @@ body.addEventListener('submit', function(ev){
 });
 
 
-function invite(coc, email, first_name, last_name, recaptcha_res, fn){
+function invite(coc, email, first_name, last_name, fn){
   request
   .post('/invite/')
   .type('form')
@@ -41,7 +41,6 @@ function invite(coc, email, first_name, last_name, recaptcha_res, fn){
     email: email,
     fname: first_name,
     lname: last_name,
-    "g-recaptcha-response": recaptcha_res
   })
   .end(function(res){
       console.log(res);
