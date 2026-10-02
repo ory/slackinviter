@@ -134,13 +134,14 @@
       body: new URLSearchParams(new FormData(form)),
     })
       .then(function (res) {
+        if (res.ok) {
+          setLoading(false);
+          showSuccess();
+          return;
+        }
         return res.text().then(function (text) {
           setLoading(false);
-          if (res.ok) {
-            showSuccess();
-          } else {
-            showServerError(text.trim());
-          }
+          showServerError(text.trim());
         });
       })
       .catch(function () {
