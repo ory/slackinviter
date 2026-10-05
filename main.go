@@ -6,10 +6,10 @@ import (
 	"expvar"
 	"flag"
 	"fmt"
+	"html/template"
 	"log"
 	"net/http"
 	"os"
-	"text/template"
 	"time"
 
 	"github.com/gorilla/handlers"
