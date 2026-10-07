@@ -153,8 +153,9 @@ p {
 }
 
 .lockup-slash {
+  width: 1.5px;
   height: 2.1875rem;
-  width: auto;
+  flex-shrink: 0;
   color: var(--logo-foreground);
 }
 
